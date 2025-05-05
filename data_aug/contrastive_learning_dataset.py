@@ -3,11 +3,10 @@ from data_aug.gaussian_blur import GaussianBlur
 from torchvision import transforms, datasets
 from data_aug.view_generator import ContrastiveLearningViewGenerator
 from exceptions.exceptions import InvalidDatasetSelection
+import os
 
 
 class ContrastiveLearningDataset:
-    def __init__(self, root_folder):
-        self.root_folder = root_folder
 
     @staticmethod
     def get_simclr_pipeline_transform(size, s=1):
@@ -21,18 +20,28 @@ class ContrastiveLearningDataset:
                                               transforms.ToTensor()])
         return data_transforms
 
-    def get_dataset(self, name, n_views):
-        valid_datasets = {'cifar10': lambda: datasets.CIFAR10(self.root_folder, train=True,
-                                                              transform=ContrastiveLearningViewGenerator(
-                                                                  self.get_simclr_pipeline_transform(32),
-                                                                  n_views),
-                                                              download=True),
+    def get_dataset(self, data_dir, name, n_views):
+        valid_datasets = {
+            'cifar10': lambda: datasets.CIFAR10(data_dir, train=True,
+                                                transform=ContrastiveLearningViewGenerator(
+                                                    self.get_simclr_pipeline_transform(32),
+                                                    n_views),
+                                                download=True),
 
-                          'stl10': lambda: datasets.STL10(self.root_folder, split='unlabeled',
+            'stl10': lambda: datasets.STL10(data_dir, split='unlabeled',
+                                            transform=ContrastiveLearningViewGenerator(
+                                                self.get_simclr_pipeline_transform(96),
+                                                n_views),
+                                            download=True),
+            'test-100': lambda: datasets.ImageFolder(data_dir,
+                                                    transform=ContrastiveLearningViewGenerator(
+                                                        self.get_simclr_pipeline_transform(96),
+                                                        n_views)),
+            'test-unlabeled': lambda: datasets.ImageFolder(data_dir,
                                                           transform=ContrastiveLearningViewGenerator(
                                                               self.get_simclr_pipeline_transform(96),
-                                                              n_views),
-                                                          download=True)}
+                                                              n_views))
+        }
 
         try:
             dataset_fn = valid_datasets[name]

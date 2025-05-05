@@ -11,10 +11,12 @@ model_names = sorted(name for name in models.__dict__
                      and callable(models.__dict__[name]))
 
 parser = argparse.ArgumentParser(description='PyTorch SimCLR')
-parser.add_argument('-data', metavar='DIR', default='./datasets',
+parser.add_argument('-data', metavar='DIR', default='./datasets/test-100',
                     help='path to dataset')
-parser.add_argument('-dataset-name', default='stl10',
-                    help='dataset name', choices=['stl10', 'cifar10'])
+parser.add_argument('-dataset-name', default='test-100',
+                    help='dataset name', choices=['stl10', 'cifar10', 'test-100'])
+parser.add_argument('--checkpoint', default='', type=str, metavar='PATH',
+                    help='path to latest checkpoint (default: none)')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet18',
                     choices=model_names,
                     help='model architecture: ' +
@@ -64,9 +66,9 @@ def main():
         args.device = torch.device('cpu')
         args.gpu_index = -1
 
-    dataset = ContrastiveLearningDataset(args.data)
+    dataset = ContrastiveLearningDataset()
 
-    train_dataset = dataset.get_dataset(args.dataset_name, args.n_views)
+    train_dataset = dataset.get_dataset(args.data, args.dataset_name, args.n_views)
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True,
@@ -82,8 +84,64 @@ def main():
     #  It’s a no-op if the 'gpu_index' argument is a negative integer or None.
     with torch.cuda.device(args.gpu_index):
         simclr = SimCLR(model=model, optimizer=optimizer, scheduler=scheduler, args=args)
-        simclr.train(train_loader)
+        if args.checkpoint:
+            if os.path.isfile(args.checkpoint):
+                print("=> loading checkpoint '{}'".format(args.checkpoint))
+                checkpoint = torch.load(args.checkpoint)
+                model.load_state_dict(checkpoint['state_dict'])
+                optimizer.load_state_dict(checkpoint['optimizer'])
+                print("=> loaded checkpoint '{}' (epoch {})".format(args.checkpoint, checkpoint['epoch']))
+                test_loader = get_test_loader(args)
+                #criterion = torch.nn.MSELoss().to(args.device)
+                test(model, test_loader, args)
+            else:
+                print("=> no checkpoint found at '{}'".format(args.checkpoint))
+        else:
+            simclr.train(train_loader)
 
 
 if __name__ == "__main__":
+    import os
+    import sys
+    import matplotlib.pyplot as plt
+    from sklearn.manifold import TSNE
+    def test(model, test_loader, args):
+        model.eval()
+        all_embeddings = []
+        with torch.no_grad():
+            for i, (images, _) in enumerate(test_loader):
+                images = torch.cat(images, dim=0)
+                if args.device == torch.device('cuda'):
+                    images = images.cuda(args.gpu_index, non_blocking=True)
+                
+                # get the output from the model
+                output = model(images)
+                
+                # calculate the loss
+                all_embeddings.append(output.cpu())
+        
+        all_embeddings = torch.cat(all_embeddings, dim=0)
+        print(f"Extracted embeddings shape: {all_embeddings.shape}")
+        # Run t-SNE on the embeddings
+        tsne = TSNE(n_components=2, perplexity=30, init='pca', random_state=42)
+        tsne_results = tsne.fit_transform(all_embeddings.numpy())
+
+        # Plot
+        plt.figure(figsize=(10, 8))
+        plt.scatter(tsne_results[:, 0], tsne_results[:, 1], s=5, alpha=0.6)
+        plt.title('t-SNE of SimCLR Embeddings (Unlabeled)')
+        plt.xlabel('Dim 1')
+        plt.ylabel('Dim 2')
+        plt.tight_layout()
+        plt.savefig("tsne_unlabeled.png", dpi=300)
+        plt.show()
+    
+    def get_test_loader(args):
+        dataset = ContrastiveLearningDataset()
+        test_dataset = dataset.get_dataset(args.data, args.dataset_name, args.n_views)
+        test_loader = torch.utils.data.DataLoader(
+            test_dataset, batch_size=args.batch_size, shuffle=False,
+            num_workers=args.workers, pin_memory=True, drop_last=False)
+        return test_loader
+    
     main()
