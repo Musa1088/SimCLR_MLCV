@@ -14,7 +14,7 @@ parser = argparse.ArgumentParser(description='PyTorch SimCLR')
 parser.add_argument('-data', metavar='DIR', default='./datasets/test-100',
                     help='path to dataset')
 parser.add_argument('-dataset-name', default='test-100',
-                    help='dataset name', choices=['stl10', 'cifar10', 'test-100'])
+                    help='dataset name', choices=['stl10', 'cifar10', 'test-100', 'single_organoids'])
 parser.add_argument('--checkpoint', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet18',

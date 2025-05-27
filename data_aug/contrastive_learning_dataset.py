@@ -40,6 +40,10 @@ class ContrastiveLearningDataset:
             'test-unlabeled': lambda: datasets.ImageFolder(data_dir,
                                                           transform=ContrastiveLearningViewGenerator(
                                                               self.get_simclr_pipeline_transform(96),
+                                                              n_views)),
+            'single_organoids': lambda: datasets.ImageFolder(data_dir,
+                                                          transform=ContrastiveLearningViewGenerator(
+                                                              self.get_simclr_pipeline_transform(96),
                                                               n_views))
         }
 
