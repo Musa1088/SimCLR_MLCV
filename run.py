@@ -5,16 +5,18 @@ from torchvision import models
 from data_aug.contrastive_learning_dataset import ContrastiveLearningDataset
 from models.resnet_simclr import ResNetSimCLR
 from simclr import SimCLR
+import seaborn as sns
+from sklearn.metrics.pairwise import cosine_similarity
 
 model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
                      and callable(models.__dict__[name]))
 
 parser = argparse.ArgumentParser(description='PyTorch SimCLR')
-parser.add_argument('-data', metavar='DIR', default='./datasets/test-100',
+parser.add_argument('--data', metavar='DIR', default='./datasets/test-100',
                     help='path to dataset')
-parser.add_argument('-dataset-name', default='test-100',
-                    help='dataset name', choices=['stl10', 'cifar10', 'test-100', 'single_organoids'])
+parser.add_argument('--dataset-name', default='test-100',
+                    help='dataset name', choices=['stl10', 'cifar10', 'test-100', 'single_organoids', 'train-100', 'test-unlabeled'])
 parser.add_argument('--checkpoint', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet18',
@@ -67,7 +69,7 @@ def main():
         args.gpu_index = -1
 
     dataset = ContrastiveLearningDataset()
-
+    args.n_views = 1
     train_dataset = dataset.get_dataset(args.data, args.dataset_name, args.n_views)
 
     train_loader = torch.utils.data.DataLoader(
@@ -91,9 +93,11 @@ def main():
                 model.load_state_dict(checkpoint['state_dict'])
                 optimizer.load_state_dict(checkpoint['optimizer'])
                 print("=> loaded checkpoint '{}' (epoch {})".format(args.checkpoint, checkpoint['epoch']))
-                test_loader = get_test_loader(args)
+                #test_loader = get_test_loader(args)
+                test_loader, ground_truth_ids = get_test_loader_with_targets(args)
+                test(model, test_loader, args, ground_truth_ids=ground_truth_ids)
                 #criterion = torch.nn.MSELoss().to(args.device)
-                test(model, test_loader, args)
+                #test(model, test_loader, args)
             else:
                 print("=> no checkpoint found at '{}'".format(args.checkpoint))
         else:
@@ -104,8 +108,59 @@ if __name__ == "__main__":
     import os
     import sys
     import matplotlib.pyplot as plt
-    from sklearn.manifold import TSNE
-    def test(model, test_loader, args):
+    
+    def plot_tsne(embeddings, cluster_ids=None, save_path="tsne.png", title="t-SNE of SimCLR Embeddings"):
+        from sklearn.manifold import TSNE
+        import matplotlib.pyplot as plt
+
+        tsne = TSNE(n_components=2, perplexity=30, init='pca', random_state=42)
+        tsne_results = tsne.fit_transform(embeddings)
+
+        plt.figure(figsize=(10, 8))
+        if cluster_ids is not None:
+            plt.scatter(tsne_results[:, 0], tsne_results[:, 1], c=cluster_ids, cmap='tab10', s=5)
+            plt.colorbar(label='Cluster ID')
+        else:
+            plt.scatter(tsne_results[:, 0], tsne_results[:, 1], s=5, alpha=0.6)
+        plt.title(title)
+        plt.xlabel('Dim 1')
+        plt.ylabel('Dim 2')
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=300)
+        plt.show()
+        return tsne_results
+
+    def plot_tsne_3d(embeddings, cluster_ids=None, save_path="tsne_3d.png", title="3D t-SNE of SimCLR Embeddings"):
+        from sklearn.manifold import TSNE
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.mplot3d import Axes3D
+
+        tsne = TSNE(n_components=3, perplexity=30, init='pca', random_state=42)
+        tsne_results = tsne.fit_transform(embeddings)
+
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+
+        if cluster_ids is not None:
+            scatter = ax.scatter(tsne_results[:, 0], tsne_results[:, 1], tsne_results[:, 2],
+                                c=cluster_ids, cmap='tab10', s=10, alpha=0.7)
+            legend1 = ax.legend(*scatter.legend_elements(), title="Clusters")
+            ax.add_artist(legend1)
+        else:
+            ax.scatter(tsne_results[:, 0], tsne_results[:, 1], tsne_results[:, 2],
+                    s=10, alpha=0.7)
+
+        ax.set_title(title)
+        ax.set_xlabel("TSNE 1")
+        ax.set_ylabel("TSNE 2")
+        ax.set_zlabel("TSNE 3")
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=300)
+        plt.show()
+        return tsne_results
+
+
+    def test(model, test_loader, args, ground_truth_ids=None):
         model.eval()
         all_embeddings = []
         with torch.no_grad():
@@ -113,29 +168,64 @@ if __name__ == "__main__":
                 images = torch.cat(images, dim=0)
                 if args.device == torch.device('cuda'):
                     images = images.cuda(args.gpu_index, non_blocking=True)
-                
-                # get the output from the model
                 output = model(images)
-                
-                # calculate the loss
                 all_embeddings.append(output.cpu())
-        
         all_embeddings = torch.cat(all_embeddings, dim=0)
         print(f"Extracted embeddings shape: {all_embeddings.shape}")
-        # Run t-SNE on the embeddings
-        tsne = TSNE(n_components=2, perplexity=30, init='pca', random_state=42)
-        tsne_results = tsne.fit_transform(all_embeddings.numpy())
 
-        # Plot
-        plt.figure(figsize=(10, 8))
-        plt.scatter(tsne_results[:, 0], tsne_results[:, 1], s=5, alpha=0.6)
-        plt.title('t-SNE of SimCLR Embeddings (Unlabeled)')
-        plt.xlabel('Dim 1')
-        plt.ylabel('Dim 2')
+        # Plot t-SNE with ground truth clusters if available
+        if ground_truth_ids is not None:
+            plot_tsne(
+                all_embeddings.numpy(),
+                cluster_ids=ground_truth_ids,
+                save_path="tsne_ground_truth.png",
+                title="t-SNE of SimCLR Embeddings (Ground Truth Clusters)"
+            )
+            plot_tsne_3d(
+                all_embeddings.numpy(),
+                cluster_ids=ground_truth_ids,  # or ground_truth_ids
+                save_path="tsne_3d_kmeans.png",
+                title="3D t-SNE with KMeans"
+            )
+
+
+        # Plot t-SNE without clusters
+        tsne_results = plot_tsne(
+            all_embeddings.numpy(),
+            save_path="tsne_unlabeled.png",
+            title="t-SNE of SimCLR Embeddings (Unlabeled)"
+        )
+
+        from sklearn.cluster import KMeans
+        k = 10# try 3–10 and see which gives meaningful clusters
+        kmeans = KMeans(n_clusters=k, random_state=42)
+        cluster_ids = kmeans.fit_predict(all_embeddings.numpy())
+
+        # Plot t-SNE with cluster coloring
+        plot_tsne(
+            all_embeddings.numpy(),
+            cluster_ids=cluster_ids,
+            save_path="tsne_kmeans.png",
+            title=f"t-SNE of SimCLR Embeddings with KMeans (k={k})"
+        )
+
+        print(f"Number of embeddings: {all_embeddings.shape[0]}")
+        plot_cosine_similarity_matrix(all_embeddings.numpy())
+
+
+    def plot_cosine_similarity_matrix(embeddings, save_path="cosine_similarity_matrix.png"):
+        # Compute cosine similarity
+        sim_matrix = cosine_similarity(embeddings)
+
+        # Plot heatmap
+        plt.figure(figsize=(12, 10))
+        sns.heatmap(sim_matrix, cmap="viridis", xticklabels=False, yticklabels=False)
+        plt.title("Cosine Similarity Matrix of SimCLR Embeddings")
         plt.tight_layout()
-        plt.savefig("tsne_unlabeled.png", dpi=300)
-        plt.show()
-    
+        plt.savefig(save_path, dpi=300)
+        print(f"Cosine similarity matrix saved to: {save_path}")
+
+
     def get_test_loader(args):
         dataset = ContrastiveLearningDataset()
         test_dataset = dataset.get_dataset(args.data, args.dataset_name, args.n_views)
@@ -143,5 +233,15 @@ if __name__ == "__main__":
             test_dataset, batch_size=args.batch_size, shuffle=False,
             num_workers=args.workers, pin_memory=True, drop_last=False)
         return test_loader
+
+    def get_test_loader_with_targets(args):
+        dataset = ContrastiveLearningDataset()
+        test_dataset = dataset.get_dataset(args.data, args.dataset_name, args.n_views)
+        test_loader = torch.utils.data.DataLoader(
+            test_dataset, batch_size=args.batch_size, shuffle=False,
+            num_workers=args.workers, pin_memory=True, drop_last=False)
+        # Extract ground truth cluster IDs
+        ground_truth_ids = test_dataset.targets if hasattr(test_dataset, 'targets') else None
+        return test_loader, ground_truth_ids
     
     main()
