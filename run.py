@@ -91,7 +91,8 @@ def main():
                 print("=> loading checkpoint '{}'".format(args.checkpoint))
                 checkpoint = torch.load(args.checkpoint)
                 model.load_state_dict(checkpoint['state_dict'])
-                optimizer.load_state_dict(checkpoint['optimizer'])
+                #model.load_state_dict(checkpoint)
+                #optimizer.load_state_dict(checkpoint['optimizer'])
                 print("=> loaded checkpoint '{}' (epoch {})".format(args.checkpoint, checkpoint['epoch']))
                 #test_loader = get_test_loader(args)
                 test_loader, ground_truth_ids = get_test_loader_with_targets(args)
@@ -244,4 +245,69 @@ if __name__ == "__main__":
         ground_truth_ids = test_dataset.targets if hasattr(test_dataset, 'targets') else None
         return test_loader, ground_truth_ids
     
+    def finetune_supervised(checkpoint_path, data_dir, num_classes=10, epochs=10, device='cuda'):
+        from torchvision import datasets, transforms
+        import torch
+        import torch.nn as nn
+        import torch.optim as optim
+
+        # Data
+        supervised_transform = transforms.Compose([
+            transforms.Resize(96),
+            transforms.CenterCrop(96),
+            transforms.ToTensor(),
+        ])
+        train_dataset = datasets.ImageFolder(data_dir, transform=supervised_transform)
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4)
+
+        # Model
+        model = ResNetSimCLR(base_model='resnet18', out_dim=128)
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        model.load_state_dict(checkpoint['state_dict'])
+        encoder = model.backbone
+
+        # Linear head
+        classifier = nn.Linear(128, num_classes)
+        model_with_head = nn.Sequential(encoder, classifier)
+        model_with_head = model_with_head.to(device)
+
+        # Loss and optimizer
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.Adam(model_with_head.parameters(), lr=1e-4)
+
+        # Training loop
+        model_with_head.train()
+        for epoch in range(epochs):
+            for images, labels in train_loader:
+                images, labels = images.to(device), labels.to(device)
+                outputs = model_with_head(images)
+                loss = criterion(outputs, labels)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+            print(f"Epoch {epoch+1}, Loss: {loss.item()}")
+
+        print("Fine-tuning complete.")
+
+        # Save the fine-tuned model
+        torch.save({ 'epoch': epochs,
+            'arch': 'resnet18',
+            'state_dict': model.state_dict(),
+            'optimizer': optimizer.state_dict()}, "finetuned_model.pth")
+        print("Fine-tuned model saved to finetuned_model.pth")
+
+    checkpoint_path = "runs/May27_08-44-15_kirk/checkpoint_0200.pth.tar"
+    data_dir = "./datasets/train-100"
+    num_classes = 10  # Set to the number of classes in your dataset
+    epochs = 10
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    #finetune_supervised(
+    #    checkpoint_path=checkpoint_path,
+    #    data_dir=data_dir,
+    #    num_classes=num_classes,
+    #    epochs=epochs,
+    #    device=device
+    #)
+
     main()
